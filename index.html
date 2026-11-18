@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="tr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Barkod Okuyucu</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f6f6f4;--fg:#1c1c1a;--card:#fff;--bd:#d9d9d4;--ac:#0b6e4f;--mut:#6b6b66}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161615;--fg:#eeeeea;--card:#222220;--bd:#3a3a36;--ac:#3fbf8f;--mut:#a0a09a}}
+:root[data-theme="dark"]{--bg:#161615;--fg:#eeeeea;--card:#222220;--bd:#3a3a36;--ac:#3fbf8f;--mut:#a0a09a}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,sans-serif;padding:14px;max-width:560px;margin-inline:auto}
+h1{font-size:20px;margin:0 0 12px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px;margin-bottom:12px}
+video{width:100%;border-radius:8px;background:#000;display:none;max-height:300px}
+button,input[type=text]{font:inherit;padding:10px 12px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--fg)}
+button{background:var(--ac);color:#fff;border:0;font-weight:600}
+button.sec{background:var(--card);color:var(--fg);border:1px solid var(--bd)}
+.row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.row>input{flex:1;min-width:0}
+.chk{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
+.chk label{display:flex;gap:6px;align-items:center;font-size:15px}
+.msg{color:var(--mut);font-size:14px;margin-top:6px}
+.rec{border-top:1px solid var(--bd);padding:8px 0;font-size:14px}
+.rec b{font-size:15px}
+</style></head><body>
+<h1>Barkod Okuyucu</h1>
+<div class="card">
+  <video id="v" playsinline muted></video>
+  <input id="code" type="text" inputmode="none" autocomplete="off" autocapitalize="off" placeholder="Barkodu okut…" style="width:100%;font-size:20px;padding:14px;border:2px solid var(--ac)">
+  <div class="row">
+    <button class="sec" id="kb">Klavye Aç/Kapat</button>
+    <button class="sec" id="scan">Canlı Kamera</button>
+  </div>
+  <div class="msg" id="msg">Terminal tetiğine bas, kod buraya yazılır.</div>
+</div>
+<div class="card">
+  <div class="row"><input id="model" type="text" placeholder="Marka / model"><input id="tip" type="text" placeholder="Dolap tipi"></div>
+  <div class="chk" id="chk"></div>
+  <div class="row"><input id="note" type="text" placeholder="Not"></div>
+  <div class="row"><button id="save">Kaydet</button></div>
+</div>
+<div class="card">
+  <div class="row" style="margin:0 0 6px"><b style="flex:1;align-self:center" id="cnt">Kayıtlar (0)</b>
+    <button class="sec" id="copy">Kopyala</button><button class="sec" id="clr">Temizle</button></div>
+  <div id="list"></div>
+</div>
+<script>
+const items=["Stiker","Raf","Panjur","Kanopi","Kaçak akım","Motor grubu","Kapı","Dolap hasarı"];
+const $=id=>document.getElementById(id);
+$("chk").innerHTML=items.map((t,i)=>`<label><input type="checkbox" data-i="${i}">${t}</label>`).join("");
+let recs=[];
+try{recs=JSON.parse(localStorage.getItem("recs")||"[]")}catch(e){}
+const persist=()=>{try{localStorage.setItem("recs",JSON.stringify(recs))}catch(e){}};
+const say=t=>$("msg").textContent=t;
+function render(){
+  $("cnt").textContent="Kayıtlar ("+recs.length+")";
+  $("list").innerHTML=recs.map(r=>`<div class="rec"><b>${esc(r.code)}</b> · ${esc(r.model)} ${esc(r.tip)}<br>${r.sel.length?"Eksik/hasar: "+r.sel.join(", "):"Sorun yok"}${r.note?"<br>"+esc(r.note):""}</div>`).join("");
+}
+const esc=s=>String(s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let stream=null,timer=null,zx=null;
+function found(c){
+  $("code").value=c;say("Okundu: "+c);
+  if(navigator.vibrate)try{navigator.vibrate(80)}catch(e){}
+  stop();
+}
+function stop(){
+  if(timer){clearInterval(timer);timer=null}
+  if(zx){try{zx.reset()}catch(e){}zx=null}
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
+  $("v").style.display="none";$("scan").textContent="Canlı Kamera";
+}
+$("scan").onclick=async()=>{
+  if(stream||zx){stop();return}
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
+    const v=$("v");v.srcObject=stream;v.style.display="block";await v.play();
+    $("scan").textContent="Kamerayı Kapat";say("Barkodu kadraja getir…");
+    if("BarcodeDetector" in window){
+      const d=new BarcodeDetector();
+      timer=setInterval(async()=>{try{const r=await d.detect(v);if(r.length)found(r[0].rawValue)}catch(e){}},250);
+    }else if(window.ZXing){
+      zx=new ZXing.BrowserMultiFormatReader();
+      zx.decodeFromVideoElement(v,(r)=>{if(r)found(r.getText())});
+    }else say("Bu tarayıcıda otomatik okuma yok; fotoğraftan oku veya elle yaz.");
+  }catch(e){stop();say("Canlı kamera bu sayfada engelli ("+(e&&e.name||"hata")+"). Yukarıdaki fotoğraf düğmesini kullan veya elle yaz.")}
+};
+$("save").onclick=()=>{
+  const code=$("code").value.trim();
+  if(!code){say("Önce barkod oku veya yaz.");return}
+  const sel=[...document.querySelectorAll("#chk input:checked")].map(c=>items[c.dataset.i]);
+  recs.unshift({code,model:$("model").value,tip:$("tip").value,sel,note:$("note").value});
+  persist();render();
+  $("code").value="";$("note").value="";document.querySelectorAll("#chk input").forEach(c=>c.checked=false);
+  say("Kaydedildi. Sıradaki barkodu okut.");$("code").focus();
+};
+$("copy").onclick=async()=>{
+  const head=["Barkod","Marka/Model","Dolap Tipi",...items,"Not"].join("\t");
+  const rows=recs.map(r=>[r.code,r.model,r.tip,...items.map(i=>r.sel.includes(i)?"X":""),r.note].join("\t"));
+  const txt=[head,...rows].join("\n");
+  try{await navigator.clipboard.writeText(txt);say("Kopyalandı; Excel'e yapıştırabilirsin.")}
+  catch(e){const t=document.createElement("textarea");t.value=txt;document.body.appendChild(t);t.select();try{document.execCommand("copy");say("Kopyalandı.")}catch(x){say("Kopyalanamadı.")}t.remove()}
+};
+$("clr").onclick=()=>{if(recs.length&&confirm("Tüm kayıtlar silinsin mi?")){recs=[];persist();render()}};
+
+const beep=()=>{try{const c=new (window.AudioContext||window.webkitAudioContext)(),o=c.createOscillator();o.frequency.value=1000;o.connect(c.destination);o.start();setTimeout(()=>{o.stop();c.close()},120)}catch(e){}};
+let kbOn=false;
+$("kb").onclick=()=>{kbOn=!kbOn;$("code").inputMode=kbOn?"text":"none";$("code").blur();$("code").focus()};
+$("code").addEventListener("keydown",e=>{
+  if(e.key==="Enter"||e.key==="Tab"){
+    e.preventDefault();const c=$("code").value.trim();if(!c)return;
+    beep();if(navigator.vibrate)try{navigator.vibrate(60)}catch(x){}
+    say(recs.some(r=>r.code===c)?"Dikkat: bu barkod daha önce kaydedilmiş!":"Okundu: "+c+" — eksik/hasarı işaretle, Kaydet'e bas.");
+  }
+});
+document.addEventListener("click",e=>{if(!e.target.closest("input,button,label"))$("code").focus()});
+setTimeout(()=>$("code").focus(),200);
+render();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+</body></html>
